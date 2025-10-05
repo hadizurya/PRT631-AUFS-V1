@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AUFS Customer Portal - Test Case</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for matching the AUFS aesthetic */
+        .header-bg {
+            background-color: #38a169; /* A professional deep green */
+        }
+        .active-link {
+            background-color: #f0f4f8; /* Very light, subtle grey-blue */
+            border-left: 4px solid #38a169;
+            color: #38a169 !important;
+        }
+        .sidebar-link:hover {
+            background-color: #f0f4f8;
+            border-left: 4px solid #a0aec0; /* Light border on hover */
+        }
+        .stat-card {
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+        .card-highlight-green { border-left: 4px solid #48bb78; }
+        .card-highlight-orange { border-left: 4px solid #ed8936; }
+        .card-highlight-red { border-left: 4px solid #f56565; }
+        .checkout-step { transition: opacity 0.3s; }
+
+        /* Hidden on mobile by default, shown by JS */
+        #sidebar-container {
+            width: 280px;
+        }
+        @media (max-width: 768px) {
+            #sidebar-container {
+                position: fixed;
+                left: 0;
+                top: 0;
+                height: 100%;
+                z-index: 50;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease-in-out;
+            }
+            #sidebar-container.open {
+                transform: translateX(0);
+            }
+            #menu-overlay {
+                display: none;
+            }
+            #menu-overlay.open {
+                display: block;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.5);
+                z-index: 40;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased">
+
+    <!-- Global State Management (The application's core data) -->
+    <script>
+        let state = {
+            currentPage: 'Dashboard',
+            cart: [],
+            orderHistory: [
+                { id: 'ORD-2024-001', date: '25 Sep 2024', total: 531.54, status: 'Delivered', items: [{ name: 'Premium Tomatoes', qty: '3 x 5kg box' }, { name: 'Wagyu Beef Strips', qty: '2 x 2kg pack' }] },
+            ],
+            invoiceHistory: [
+                { id: 'INV-2024-001', orderId: 'ORD-2024-001', dueDate: '30 Oct 2024', total: 531.54, status: 'Paid', issueDate: '26 Sep 2024' }
+            ],
+            // Mock product data
+            products: [
+                { id: 'PROD001', name: 'Premium Tomatoes', sku: 'VEG001', zone: 'Chilled', price: 12.99, image: 'https://placehold.co/150x150/f56565/ffffff?text=Tomatoes', tags: ['Chilled', 'In Stock'] },
+                { id: 'PROD002', name: 'Wagyu Beef Strips', sku: 'MEAT001', zone: 'Chilled', price: 29.50, image: 'https://placehold.co/150x150/9a2424/ffffff?text=Wagyu+Beef', tags: ['Chilled', 'Low Stock'] },
+                { id: 'PROD003', name: 'Vanilla Ice Cream', sku: 'ICE001', zone: 'Frozen', price: 8.75, image: 'https://placehold.co/150x150/b0d6f5/000000?text=Ice+Cream', tags: ['Frozen', 'In Stock'] },
+                { id: 'PROD004', name: 'Artisan Sourdough Bread', sku: 'BREAD001', zone: 'Ambient', price: 5.50, image: 'https://placehold.co/150x150/ed8936/ffffff?text=Sourdough', tags: ['Ambient', 'In Stock'] },
+            ]
+        };
+
+        // --- Core Navigation and UI Functions ---
+
+        /** Toggles the mobile sidebar visibility. */
+        const toggleSidebar = () => {
+            const sidebar = document.getElementById('sidebar-container');
+            const overlay = document.getElementById('menu-overlay');
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('open');
+        };
+
+        /** Renders the specified page and updates the active link. */
+        const renderPage = (pageName) => {
+            state.currentPage = pageName;
+            const contentContainer = document.getElementById('main-content-container');
+            let contentHTML = '';
+
+            // Close mobile menu on navigation
+            if (window.innerWidth <= 768) {
+                toggleSidebar();
+            }
+
+            // Update Active Link State
+            document.querySelectorAll('.sidebar-link').forEach(link => {
+                link.classList.remove('active-link', 'text-gray-900');
+                link.classList.add('text-gray-600');
+                if (link.dataset.page === pageName) {
+                    link.classList.add('active-link', 'text-gray-900');
+                }
+            });
+
+            // Render Cart Count
+            document.getElementById('cart-count').textContent = state.cart.length;
+
+            // Determine content based on page name
+            switch (pageName) {
+                case 'Dashboard':
+                    contentHTML = renderDashboard();
+                    break;
+                case 'Catalog':
+                    contentHTML = renderCatalog();
+                    break;
+                case 'MyOrders':
+                    contentHTML = renderMyOrders();
+                    break;
+                case 'OrderHistory':
+                    contentHTML = renderOrderHistory();
+                    break;
+                case 'Invoices':
+                    contentHTML = renderInvoices();
+                    break;
+                default:
+                    contentHTML = '<h1>Page Not Found</h1>';
+            }
+
+            contentContainer.innerHTML = contentHTML;
+            // After rendering MyOrders (which is the checkout), we need to attach the Place Order listener
+            if (pageName === 'MyOrders') {
+                attachMyOrdersListeners();
+            }
+        };
+
+
+        // --- E-commerce Logic ---
+
+        /** Adds a product to the cart. */
+        const addToCart = (productId) => {
+            const product = state.products.find(p => p.id === productId);
+            if (product) {
+                state.cart.push({ ...product, quantity: 1, cartId: Date.now() });
+                // Re-render the cart count in the header
+                document.getElementById('cart-count').textContent = state.cart.length;
+            }
+        };
+
+        /** Simulates the checkout process. */
+        const completeCheckout = (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const cardName = form.querySelector('#card-name').value;
+
+            // 1. Create a new order object
+            const newOrderTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const newOrderId = `ORD-${Date.now().toString().slice(-6)}`;
+            const newInvoiceId = `INV-${Date.now().toString().slice(-6)}`;
+
+            const newOrder = {
+                id: newOrderId,
+                date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+                total: parseFloat(newOrderTotal.toFixed(2)),
+                status: 'Processing',
+                items: state.cart.map(item => ({ name: item.name, qty: `1 x $${item.price.toFixed(2)}` })),
+                paymentMethod: cardName,
+                deliveryDate: 'Approx. 3 days from now'
+            };
+
+            // 2. Add to history
+            state.orderHistory.unshift(newOrder);
+
+            // 3. Create a corresponding invoice
+            state.invoiceHistory.unshift({
+                id: newInvoiceId,
+                orderId: newOrderId,
+                dueDate: '15 days from now',
+                total: newOrder.total,
+                status: 'Pending',
+                issueDate: newOrder.date
+            });
+
+            // 4. Clear the cart
+            state.cart = [];
+
+            // 5. Navigate to My Orders to show confirmation
+            renderPage('MyOrders');
+        };
+
+
+        // --- Page Render Functions ---
+
+        const renderDashboard = () => {
+            return `
+                <div class="p-6">
+                    <h1 class="text-3xl font-bold text-gray-800 mb-6">Welcome to AUFS Order Portal</h1>
+                    
+                    <div class="header-bg p-8 rounded-xl shadow-lg mb-8 text-white" style="background-image: url('https://placehold.co/1200x300/38a169/ffffff/blur?text=Fresh+Produce+Distribution'); background-size: cover; background-position: center;">
+                        <div class="max-w-xl">
+                            <h2 class="text-4xl font-extrabold mb-2">Welcome to AUFS Order Portal</h2>
+                            <p class="text-lg opacity-90 mb-4">Your trusted partner for fresh food distribution across NT & SA</p>
+                            <button onclick="renderPage('Catalog')" class="bg-orange-500 hover:bg-orange-600 text-white font-semibold py-2 px-6 rounded-lg shadow-md transition duration-200">
+                                Browse Catalog
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- KPI Cards Section -->
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
+                        <div class="stat-card bg-white p-5 rounded-xl card-highlight-green">
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm font-medium text-gray-500">Active Orders</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                            </div>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">12</p>
+                            <p class="text-sm text-green-500 mt-1">+2 from last week</p>
+                        </div>
+
+                        <div class="stat-card bg-white p-5 rounded-xl card-highlight-orange">
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm font-medium text-gray-500">Pending Deliveries</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                            </div>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">8</p>
+                            <p class="text-sm text-gray-500 mt-1">Due today</p>
+                        </div>
+
+                        <div class="stat-card bg-white p-5 rounded-xl card-highlight-green">
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm font-medium text-gray-500">Products Available</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                            </div>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">1,247</p>
+                            <p class="text-sm text-green-500 mt-1">Fresh stock updated</p>
+                        </div>
+                        
+                        <div class="stat-card bg-white p-5 rounded-xl card-highlight-red">
+                            <div class="flex justify-between items-center">
+                                <span class="text-sm font-medium text-gray-500">Fill Rate</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
+                            </div>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">96.2%</p>
+                            <p class="text-sm text-red-500 mt-1">-1.2% this month</p>
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions -->
+                    <h2 class="text-2xl font-semibold text-gray-800 mb-4">Quick Actions</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div class="bg-white p-6 rounded-xl shadow-md border border-gray-200">
+                            <h3 class="text-lg font-medium text-gray-900 mb-2">Quick Reorder</h3>
+                            <p class="text-gray-600 mb-4">Reorder from your recent purchases</p>
+                            <button onclick="renderPage('OrderHistory')" class="text-sm font-semibold text-blue-600 hover:text-blue-800">View Recent Orders →</button>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-xl shadow-md border border-gray-200">
+                            <h3 class="text-lg font-medium text-gray-900 mb-2">Delivery Schedule</h3>
+                            <p class="text-gray-600 mb-4">Next Delivery: Tomorrow 9:00 AM</p>
+                            <button class="text-sm font-semibold text-blue-600 hover:text-blue-800">View Schedule →</button>
+                        </div>
+
+                        <div class="bg-white p-6 rounded-xl shadow-md border border-gray-200">
+                            <h3 class="text-lg font-medium text-gray-900 mb-2">Low Stock Alert</h3>
+                            <p class="text-gray-600 mb-4">3 items running low in inventory</p>
+                            <button onclick="renderPage('Catalog')" class="text-sm font-semibold text-blue-600 hover:text-blue-800">Check Inventory →</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderCatalog = () => {
+            const productCards = state.products.map(p => {
+                const tagsHTML = p.tags.map(tag => `<span class="text-xs font-semibold px-2.5 py-0.5 rounded-full ${tag === 'Low Stock' ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}">${tag}</span>`).join('');
+                return `
+                    <div class="bg-white rounded-xl shadow-lg overflow-hidden flex flex-col">
+                        <img src="${p.image}" alt="${p.name}" class="h-48 w-full object-cover">
+                        <div class="p-4 flex-grow">
+                            <div class="flex space-x-2 mb-2">${tagsHTML}</div>
+                            <h3 class="text-lg font-bold text-gray-900">${p.name}</h3>
+                            <p class="text-sm text-gray-500 mb-3">SKU: ${p.sku} | Zone: ${p.zone}</p>
+                            <p class="text-xl font-semibold text-gray-800 mb-4">$${p.price.toFixed(2)}</p>
+                        </div>
+                        <div class="p-4 border-t border-gray-100">
+                            <button data-product-id="${p.id}" class="add-to-cart-btn w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 rounded-lg transition duration-150">
+                                Add to Cart
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <div class="p-6">
+                    <h1 class="text-3xl font-bold text-gray-800 mb-2">Product Catalog</h1>
+                    <p class="text-gray-600 mb-8">Browse and order from our fresh food selection</p>
+                    
+                    <!-- Filters/Search Bar (Mock) -->
+                    <div class="bg-white p-4 rounded-xl shadow-md flex flex-wrap gap-4 mb-8">
+                        <input type="text" placeholder="Search products..." class="flex-grow p-2 border border-gray-300 rounded-lg">
+                        <select class="p-2 border border-gray-300 rounded-lg">
+                            <option>All Categories</option>
+                        </select>
+                        <select class="p-2 border border-gray-300 rounded-lg">
+                            <option>All Temperature Zones</option>
+                        </select>
+                        <button class="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition">Search</button>
+                    </div>
+
+                    <!-- Product Grid -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                        ${productCards}
+                    </div>
+                </div>
+            `;
+        };
+
+        const renderMyOrders = () => {
+            if (state.cart.length > 0) {
+                // Cart View
+                const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+                const cartItemsHTML = state.cart.map(item => `
+                    <div class="flex justify-between items-center py-4 border-b">
+                        <div class="flex items-center space-x-4">
+                            <img src="${item.image}" alt="${item.name}" class="w-12 h-12 object-cover rounded-md">
+                            <div>
+                                <p class="font-semibold text-gray-800">${item.name}</p>
+                                <p class="text-sm text-gray-500">SKU: ${item.sku}</p>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="font-bold text-gray-900">$${item.price.toFixed(2)}</p>
+                            <p class="text-sm text-gray-500">Qty: 1</p>
+                        </div>
+                    </div>
+                `).join('');
+
+                return `
+                    <div class="p-6 max-w-4xl mx-auto">
+                        <h1 class="text-3xl font-bold text-gray-800 mb-8">My Cart (${state.cart.length} Items)</h1>
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div class="lg:col-span-2 bg-white rounded-xl shadow-lg p-6">
+                                ${cartItemsHTML || '<p class="text-center py-10 text-gray-500">Your cart is empty. Go to Catalog to add items!</p>'}
+                            </div>
+                            <div class="lg:col-span-1 bg-white rounded-xl shadow-lg p-6">
+                                <h2 class="text-xl font-semibold mb-4 border-b pb-2">Order Summary</h2>
+                                <div class="space-y-2 mb-6">
+                                    <div class="flex justify-between text-gray-600"><span>Subtotal:</span><span>$${cartTotal.toFixed(2)}</span></div>
+                                    <div class="flex justify-between text-gray-600"><span>Shipping (Standard):</span><span>$15.00</span></div>
+                                    <div class="flex justify-between font-bold text-lg border-t pt-2"><span>Order Total:</span><span>$${(cartTotal + 15.00).toFixed(2)}</span></div>
+                                </div>
+                                <button id="proceed-to-checkout-btn" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition duration-150">
+                                    Proceed to Checkout
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Checkout Modal (Hidden by default) -->
+                        <div id="checkout-modal" class="fixed inset-0 bg-gray-600 bg-opacity-75 hidden items-center justify-center z-50">
+                            <div class="bg-white rounded-xl p-8 w-full max-w-md shadow-2xl">
+                                <h2 class="text-2xl font-bold text-gray-800 mb-6">Payment Details</h2>
+                                <form id="payment-form">
+                                    <div class="mb-4">
+                                        <label for="card-name" class="block text-sm font-medium text-gray-700">Name on Card</label>
+                                        <input type="text" id="card-name" required class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                                    </div>
+                                    <div class="mb-4">
+                                        <label for="card-number" class="block text-sm font-medium text-gray-700">Card Number</label>
+                                        <input type="text" id="card-number" value="4000 1234 5678 9010" required class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm" pattern="[0-9 ]{16,19}">
+                                    </div>
+                                    <div class="grid grid-cols-3 gap-4 mb-6">
+                                        <div>
+                                            <label for="expiry" class="block text-sm font-medium text-gray-700">Expiry</label>
+                                            <input type="text" id="expiry" value="12/26" required class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm">
+                                        </div>
+                                        <div>
+                                            <label for="cvv" class="block text-sm font-medium text-gray-700">CVV</label>
+                                            <input type="text" id="cvv" value="123" required class="mt-1 block w-full p-3 border border-gray-300 rounded-lg shadow-sm">
+                                        </div>
+                                    </div>
+                                    <div class="flex justify-end space-x-4">
+                                        <button type="button" id="cancel-checkout-btn" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                                        <button type="submit" class="px-4 py-2 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition">
+                                            Place Order Now ($${(cartTotal + 15.00).toFixed(2)})
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else if (state.orderHistory.length > 0 && state.orderHistory[0].status === 'Processing') {
+                // Confirmation View
+                const lastOrder = state.orderHistory[0];
+                return `
+                    <div class="p-6 max-w-3xl mx-auto mt-10">
+                        <div class="bg-white rounded-xl shadow-lg p-8 text-center border-t-8 border-green-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-green-500 mb-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" /></svg>
+                            <h1 class="text-3xl font-bold text-gray-800 mb-2">Order Successfully Placed!</h1>
+                            <p class="text-lg text-gray-600 mb-4">Your order <strong>${lastOrder.id}</strong> is now being processed.</p>
+                            <div class="bg-gray-50 p-4 rounded-lg inline-block text-left space-y-2">
+                                <p><strong>Total:</strong> $${lastOrder.total.toFixed(2)}</p>
+                                <p><strong>Payment:</strong> ${lastOrder.paymentMethod}</p>
+                                <p><strong>Delivery:</strong> Expected on ${lastOrder.deliveryDate}</p>
+                            </div>
+                            <div class="mt-6 flex justify-center space-x-4">
+                                <button onclick="renderPage('OrderHistory')" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-blue-700">View Order History</button>
+                                <button onclick="renderPage('Dashboard')" class="text-gray-600 bg-gray-200 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300">Continue Shopping</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                return `
+                    <div class="p-6 text-center py-20">
+                        <h1 class="text-3xl font-bold text-gray-800 mb-2">My Orders</h1>
+                        <p class="text-lg text-gray-600 mb-6">You currently have no items in your cart.</p>
+                        <button onclick="renderPage('Catalog')" class="bg-green-600 text-white font-semibold py-2 px-4 rounded-lg hover:bg-green-700">Browse Catalog</button>
+                    </div>
+                `;
+            }
+        };
+
+        const renderOrderHistory = () => {
+            const historyHTML = state.orderHistory.map(order => `
+                <div class="bg-white p-6 rounded-xl shadow-md mb-4 border border-gray-200">
+                    <div class="flex justify-between items-start mb-4 border-b pb-3">
+                        <div>
+                            <p class="text-sm text-gray-500">Ordered: ${order.date}</p>
+                            <h3 class="text-xl font-semibold text-gray-800">${order.id}</h3>
+                        </div>
+                        <span class="text-sm font-medium px-3 py-1 rounded-full ${order.status === 'Delivered' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}">
+                            ${order.status}
+                        </span>
+                    </div>
+                    
+                    <div class="grid grid-cols-3 gap-4 text-sm text-gray-600 mb-4">
+                        <div class="col-span-2">
+                            <p class="font-medium">Items:</p>
+                            <ul class="list-disc pl-5">
+                                ${order.items.map(item => `<li>${item.qty} of ${item.name}</li>`).join('')}
+                            </ul>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-2xl font-bold text-gray-900">$${order.total.toFixed(2)}</p>
+                            <p class="text-sm text-gray-500">${order.items.length} unique items</p>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 space-x-3">
+                        <button class="text-sm font-semibold text-green-600 hover:text-green-800">Reorder</button>
+                        <button class="text-sm font-semibold text-blue-600 hover:text-blue-800" onclick="renderPage('Invoices')">View Invoice</button>
+                    </div>
+                </div>
+            `).join('');
+
+            return `
+                <div class="p-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <h1 class="text-3xl font-bold text-gray-800">Order History</h1>
+                        <button class="bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 transition">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                            Export History
+                        </button>
+                    </div>
+                    
+                    <!-- Search and Filter Bar (Mock) -->
+                    <div class="bg-white p-4 rounded-xl shadow-md flex flex-wrap gap-4 mb-6">
+                        <input type="text" placeholder="Search order number..." class="flex-grow p-2 border border-gray-300 rounded-lg">
+                        <select class="p-2 border border-gray-300 rounded-lg">
+                            <option>Last 3 Months</option>
+                        </select>
+                        <button class="bg-gray-100 text-gray-700 p-2 rounded-lg hover:bg-gray-200 transition">Custom Date Range</button>
+                    </div>
+
+                    ${historyHTML}
+                </div>
+            `;
+        };
+
+        const renderInvoices = () => {
+            const invoicesHTML = state.invoiceHistory.map(inv => `
+                <div class="bg-white p-6 rounded-xl shadow-md mb-4 flex justify-between items-center border border-gray-200">
+                    <div class="flex items-center space-x-6">
+                        <div>
+                            <h3 class="text-lg font-semibold text-gray-800">${inv.id}</h3>
+                            <p class="text-sm text-gray-500">Order: ${inv.orderId} | Issued: ${inv.issueDate}</p>
+                            <p class="text-sm text-gray-500">Due Date: <span class="font-medium text-gray-700">${inv.dueDate}</span></p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center space-x-8">
+                        <span class="text-sm font-medium px-3 py-1 rounded-full ${inv.status === 'Paid' ? 'bg-green-100 text-green-800' : (inv.status === 'Overdue' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800')}">
+                            ${inv.status}
+                        </span>
+                        <div class="text-right">
+                            <p class="text-xl font-bold text-gray-900">$${inv.total.toFixed(2)}</p>
+                            <p class="text-xs text-gray-500">Inc. GST $${(inv.total * 0.1).toFixed(2)}</p>
+                        </div>
+                        <div class="space-x-3">
+                            <button class="text-sm font-semibold text-blue-600 hover:text-blue-800">View</button>
+                            <button class="text-sm font-semibold text-blue-600 hover:text-blue-800">PDF</button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            return `
+                <div class="p-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <h1 class="text-3xl font-bold text-gray-800">Invoices & Credits</h1>
+                        <button class="bg-gray-200 text-gray-700 font-semibold py-2 px-4 rounded-lg hover:bg-gray-300 transition">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                            Export All
+                        </button>
+                    </div>
+
+                    <!-- Summary Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <div class="bg-white p-5 rounded-xl border-l-4 border-yellow-500 shadow-md">
+                            <p class="text-sm font-medium text-gray-500">Outstanding Balance</p>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">$734.60</p>
+                            <p class="text-sm text-gray-500">2 invoices</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl border-l-4 border-red-500 shadow-md">
+                            <p class="text-sm font-medium text-gray-500">Overdue Amount</p>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">$445.20</p>
+                            <p class="text-sm text-gray-500">1 overdue invoice</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl border-l-4 border-green-500 shadow-md">
+                            <p class="text-sm font-medium text-gray-500">Paid This Period</p>
+                            <p class="text-3xl font-bold text-gray-900 mt-1">$724.05</p>
+                            <p class="text-sm text-gray-500">2 paid invoices</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Invoice List -->
+                    ${invoicesHTML}
+                </div>
+            `;
+        };
+
+        // --- Event Listener Attachment ---
+
+        /** Attaches specific listeners required after the MyOrders page is rendered. */
+        const attachMyOrdersListeners = () => {
+            const proceedBtn = document.getElementById('proceed-to-checkout-btn');
+            const checkoutModal = document.getElementById('checkout-modal');
+            const cancelBtn = document.getElementById('cancel-checkout-btn');
+            const paymentForm = document.getElementById('payment-form');
+
+            if (proceedBtn) {
+                proceedBtn.addEventListener('click', () => {
+                    checkoutModal.classList.remove('hidden');
+                    checkoutModal.classList.add('flex');
+                });
+            }
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', () => {
+                    checkoutModal.classList.remove('flex');
+                    checkoutModal.classList.add('hidden');
+                });
+            }
+            if (paymentForm) {
+                paymentForm.addEventListener('submit', completeCheckout);
+            }
+        };
+
+        /** Attaches all global listeners (navigation, cart buttons). */
+        const attachGlobalListeners = () => {
+            // Navigation Links
+            document.querySelectorAll('.sidebar-link').forEach(link => {
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    renderPage(e.currentTarget.dataset.page);
+                });
+            });
+
+            // Mobile Menu Toggle
+            document.getElementById('mobile-menu-btn').addEventListener('click', toggleSidebar);
+            document.getElementById('menu-overlay').addEventListener('click', toggleSidebar);
+
+            // Add to Cart Buttons (Delegation for dynamic content)
+            document.getElementById('main-content-container').addEventListener('click', (e) => {
+                if (e.target.classList.contains('add-to-cart-btn')) {
+                    const productId = e.target.dataset.productId;
+                    addToCart(productId);
+                }
+            });
+        };
+
+
+        /** Main Initialization Function */
+        const initializeApp = () => {
+            attachGlobalListeners();
+            // Start on the Dashboard
+            renderPage('Dashboard'); 
+        };
+
+        // Ensure the app initializes ONLY when the entire document structure is loaded.
+        window.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+
+    <!-- Overlay for Mobile Menu -->
+    <div id="menu-overlay"></div>
+
+    <!-- Main Application Layout -->
+    <div class="flex min-h-screen">
+        
+        <!-- Sidebar -->
+        <div id="sidebar-container" class="bg-white shadow-xl flex-shrink-0 z-40 md:static">
+            <div class="h-16 px-6 flex items-center header-bg">
+                <span class="text-lg font-extrabold text-white">AUFS</span>
+                <span class="text-sm font-medium text-gray-200 ml-1">Asia United Food Service</span>
+            </div>
+            <nav class="p-4 space-y-1">
+                <p class="px-3 py-2 text-xs font-semibold uppercase text-gray-500">Menu</p>
+                <a href="#" data-page="Dashboard" class="sidebar-link flex items-center px-3 py-2 rounded-lg text-gray-600 font-medium transition duration-150 active-link text-gray-900">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l-2-2m2 2l-7 7m0 0l-7-7m7 7V3" /></svg>
+                    Dashboard
+                </a>
+                <a href="#" data-page="Catalog" class="sidebar-link flex items-center px-3 py-2 rounded-lg text-gray-600 font-medium transition duration-150">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2h14zm0 0V9a2 2 0 00-2-2h-2m-4 2V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h6z" /></svg>
+                    Catalog
+                </a>
+                <a href="#" data-page="MyOrders" class="sidebar-link flex items-center px-3 py-2 rounded-lg text-gray-600 font-medium transition duration-150">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                    My Orders
+                </a>
+                <a href="#" data-page="OrderHistory" class="sidebar-link flex items-center px-3 py-2 rounded-lg text-gray-600 font-medium transition duration-150">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c1.657 0 3 .895 3 2s-1.343 2-3 2v2m0-4c1.657 0 3 .895 3 2s-1.343 2-3 2v2m-6-2a8 8 0 1116 0A8 8 0 016 12z" /></svg>
+                    Order History
+                </a>
+                <a href="#" data-page="Invoices" class="sidebar-link flex items-center px-3 py-2 rounded-lg text-gray-600 font-medium transition duration-150">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                    Invoices
+                </a>
+            </nav>
+        </div>
+
+        <!-- Main Content Area -->
+        <div class="flex-1 overflow-y-auto">
+            <!-- Header/Top Nav -->
+            <header class="h-16 flex items-center justify-between px-6 header-bg shadow-md">
+                <div class="flex items-center">
+                    <!-- Mobile Menu Button -->
+                    <button id="mobile-menu-btn" class="text-white md:hidden mr-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
+                    </button>
+                    <span class="text-white font-medium">AUFS</span>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <span class="bg-white text-green-700 font-semibold text-xs px-3 py-1 rounded-full shadow">Customer Buyer</span>
+                    
+                    <!-- Cart Icon -->
+                    <button onclick="renderPage('MyOrders')" class="relative text-white hover:text-gray-100">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                        <span id="cart-count" class="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-xs font-bold w-4 h-4 rounded-full flex items-center justify-center">0</span>
+                    </button>
+
+                    <!-- User Profile/Avatar -->
+                    <div class="flex items-center space-x-2 text-white">
+                        <span class="text-sm">Sarah Chen</span>
+                        <div class="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-700 font-bold">SC</div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page Content Renders Here -->
+            <div id="main-content-container" class="p-4 sm:p-6">
+                <!-- Fallback/Initial Dashboard Content -->
+                <script>document.write(renderDashboard())</script>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
